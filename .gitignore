@@ -19,6 +19,8 @@ src/utils/vendor/
 .omc/**/*.json
 .claude/
 .costrict/*.json
+.session_trajectory/
+.train_collect_trajectory/
 
 # Binary / screenshot files (root only)
 /*.png

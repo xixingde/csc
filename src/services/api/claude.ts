@@ -94,6 +94,12 @@ import {
   type SystemPrompt,
 } from '../../utils/systemPromptType.js'
 import { tokenCountFromLastAPIResponse } from '../../utils/tokens.js'
+import {
+  isTrainingTrajectoryCollectionEnabled,
+  resolveTrainingAgentDisplayName,
+  type TrainingTrajectoryCaptureContext,
+  yieldWithTrainingTrajectory,
+} from '../../utils/trajectoryStorage.js'
 import { getDynamicConfig_BLOCKS_ON_INIT } from '../analytics/growthbook.js'
 import {
   currentLimits,
@@ -708,6 +714,8 @@ export type Options = {
   hasPendingMcpServers?: boolean
   queryTracking?: QueryChainTracking
   agentId?: AgentId // Only set for subagents
+  /** Subagent type name (e.g. explore, generalPurpose). Used for training trajectory. */
+  agentType?: string
   outputFormat?: BetaJSONOutputFormat
   fastMode?: boolean
   advisorModel?: string
@@ -1327,40 +1335,6 @@ async function* queryModel(
     API_MAX_MEDIA_PER_REQUEST,
   )
 
-  // OpenAI-compatible provider: delegate to the OpenAI adapter layer
-  // after shared preprocessing (message normalization, tool filtering,
-  // media stripping) but before Anthropic-specific logic (betas, thinking, caching).
-  if (getAPIProvider() === 'openai') {
-    const { queryModelOpenAI } = await import('./openai/index.js')
-    yield* queryModelOpenAI(messagesForAPI, systemPrompt, filteredTools, signal, options)
-    return
-  }
-
-  if (getAPIProvider() === 'gemini') {
-    const { queryModelGemini } = await import('./gemini/index.js')
-    yield* queryModelGemini(
-      messagesForAPI,
-      systemPrompt,
-      filteredTools,
-      signal,
-      options,
-      thinkingConfig,
-    )
-    return
-  }
-
-  if (getAPIProvider() === 'grok') {
-    const { queryModelGrok } = await import('./grok/index.js')
-    yield* queryModelGrok(messagesForAPI, systemPrompt, filteredTools, signal, options)
-    return
-  }
-
-  if (getAPIProvider() === 'costrict') {
-    const { queryModelCoStrict } = await import('../../costrict/provider/index.js')
-    yield* queryModelCoStrict(messagesForAPI, systemPrompt, filteredTools, signal, options)
-    return
-  }
-
   // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
     postNormalizedMessageCount: messagesForAPI.length,
@@ -1441,6 +1415,91 @@ async function* queryModel(
     } as unknown as BetaToolUnion)
   }
   const allTools = [...toolSchemas, ...extraToolSchemas]
+  const trainingCapture: TrainingTrajectoryCaptureContext | null =
+    isTrainingTrajectoryCollectionEnabled()
+      ? {
+          model: options.model,
+          system: [...systemPrompt],
+          messages: messagesForAPI as (UserMessage | AssistantMessage)[],
+          tools: allTools,
+          agentType: options.agentType,
+          agentDisplayName: resolveTrainingAgentDisplayName(
+            options.agentId,
+            options.agentType,
+          ),
+        }
+      : null
+
+  // Alternate providers: delegate after shared preprocessing and final
+  // system-prompt assembly so training capture matches the Anthropic path.
+  if (getAPIProvider() === 'openai') {
+    const { queryModelOpenAI } = await import('./openai/index.js')
+    const stream = queryModelOpenAI(
+      messagesForAPI,
+      systemPrompt,
+      tools,
+      signal,
+      options,
+    )
+    if (trainingCapture) {
+      yield* yieldWithTrainingTrajectory(stream, trainingCapture)
+    } else {
+      yield* stream
+    }
+    return
+  }
+
+  if (getAPIProvider() === 'gemini') {
+    const { queryModelGemini } = await import('./gemini/index.js')
+    const stream = queryModelGemini(
+      messagesForAPI,
+      systemPrompt,
+      filteredTools,
+      signal,
+      options,
+      thinkingConfig,
+    )
+    if (trainingCapture) {
+      yield* yieldWithTrainingTrajectory(stream, trainingCapture)
+    } else {
+      yield* stream
+    }
+    return
+  }
+
+  if (getAPIProvider() === 'grok') {
+    const { queryModelGrok } = await import('./grok/index.js')
+    const stream = queryModelGrok(
+      messagesForAPI,
+      systemPrompt,
+      filteredTools,
+      signal,
+      options,
+    )
+    if (trainingCapture) {
+      yield* yieldWithTrainingTrajectory(stream, trainingCapture)
+    } else {
+      yield* stream
+    }
+    return
+  }
+
+  if (getAPIProvider() === 'costrict') {
+    const { queryModelCoStrict } = await import('../../costrict/provider/index.js')
+    const stream = queryModelCoStrict(
+      messagesForAPI,
+      systemPrompt,
+      filteredTools,
+      signal,
+      options,
+    )
+    if (trainingCapture) {
+      yield* yieldWithTrainingTrajectory(stream, trainingCapture)
+    } else {
+      yield* stream
+    }
+    return
+  }
 
   const isFastMode =
     isFastModeEnabled() &&
@@ -2933,6 +2992,27 @@ async function* queryModel(
       betas: lastRequestBetas,
     })
   })
+
+  if (trainingCapture && newMessages.length > 0) {
+    const { appendTrainingEntry, recordTrajectoryModel } = await import(
+      '../../utils/trajectoryStorage.js'
+    )
+    void recordTrajectoryModel(
+      trainingCapture.model,
+      trainingCapture.agentType,
+      trainingCapture.agentDisplayName,
+    )
+    void appendTrainingEntry(
+      {
+        system: trainingCapture.system,
+        messages: trainingCapture.messages,
+        tools: trainingCapture.tools,
+        output: newMessages,
+      },
+      trainingCapture.agentType,
+      trainingCapture.agentDisplayName,
+    )
+  }
 
   // Defensive: also release on normal completion (no-op if finally already ran).
   releaseStreamResources()
