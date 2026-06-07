@@ -695,6 +695,7 @@ async function* queryLoop(
               advisorModel: appState.advisorModel,
               skipCacheWrite,
               agentId: toolUseContext.agentId,
+              agentType: toolUseContext.agentType,
               addNotification: toolUseContext.addNotification,
               ...(params.taskBudget && {
                 taskBudget: {

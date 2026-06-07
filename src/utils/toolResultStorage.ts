@@ -20,7 +20,9 @@ import { logForDebugging } from './debug.js'
 import { getErrnoCode, toError } from './errors.js'
 import { formatFileSize } from './format.js'
 import { logError } from './log.js'
-import { getProjectDir } from './sessionStorage.js'
+// import { getProjectDir } from './sessionStorage.js'
+import { getSessionTrajectoryDir } from './sessionStorage.js'
+import { getSessionProjectDir } from '../bootstrap/state.js'
 import { jsonStringify } from './slowOperations.js'
 
 // Subdirectory name for tool results within a session
@@ -95,9 +97,12 @@ export type PersistToolResultError = {
  * Get the session directory (projectDir/sessionId)
  */
 function getSessionDir(): string {
-  return join(getProjectDir(getOriginalCwd()), getSessionId())
+  // return join(getProjectDir(getOriginalCwd()), getSessionId())
+  return join(
+    getSessionProjectDir() ?? getSessionTrajectoryDir(),
+    getSessionId(),
+  )
 }
-
 /**
  * Get the tool results directory for this session (projectDir/sessionId/tool-results)
  */

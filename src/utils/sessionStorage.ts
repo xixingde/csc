@@ -199,9 +199,24 @@ export function getProjectsDir(): string {
   return join(getClaudeConfigHomeDir(), 'projects')
 }
 
+/**
+ * Returns the base directory for session transcript JSONL files.
+ * Sessions are stored in the project root under a hidden folder so trajectories
+ * are easy to collect alongside the project they belong to.
+ */
+export function getSessionTrajectoryDir(): string {
+  return join(getOriginalCwd(), '.session_trajectory')
+}
+
+/** Session transcript base: honors sessionProjectDir override, else project-local dir. */
+function getSessionStorageBaseDir(): string {
+  return getSessionProjectDir() ?? getSessionTrajectoryDir()
+}
+
 export function getTranscriptPath(): string {
-  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
-  return join(projectDir, `${getSessionId()}.jsonl`)
+  // const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  // return join(projectDir, `${getSessionId()}.jsonl`)
+  return join(getSessionStorageBaseDir(), `${getSessionId()}.jsonl`)
 }
 
 export function getTranscriptPathForSession(sessionId: string): string {
@@ -220,8 +235,9 @@ export function getTranscriptPathForSession(sessionId: string): string {
   if (sessionId === getSessionId()) {
     return getTranscriptPath()
   }
-  const projectDir = getProjectDir(getOriginalCwd())
-  return join(projectDir, `${sessionId}.jsonl`)
+  // const projectDir = getProjectDir(getOriginalCwd())
+  // return join(projectDir, `${sessionId}.jsonl`)
+  return join(getSessionTrajectoryDir(), `${sessionId}.jsonl`)
 }
 
 // 50 MB — session JSONL can grow to multiple GB (inc-3930). Callers that
@@ -244,25 +260,59 @@ export function clearAgentTranscriptSubdir(agentId: string): void {
   agentTranscriptSubdirs.delete(agentId)
 }
 
+// In-memory maps for agentType-N display name assignment.
+const agentTypeCounters = new Map<string, number>()
+const agentIdToDisplayName = new Map<string, string>()
+
+/**
+ * Allocate or restore a display name for a subagent.
+ *
+ * On first creation, assigns `${agentType}-${counter}` and increments the
+ * per-type counter. Pass `savedDisplayName` (read from metadata on resume)
+ * to restore an existing name without consuming a new counter slot.
+ */
+export function allocateAgentDisplayName(
+  agentId: AgentId,
+  agentType: string,
+  savedDisplayName?: string,
+): string {
+  const existing = agentIdToDisplayName.get(agentId)
+  if (existing) return existing
+
+  if (savedDisplayName) {
+    agentIdToDisplayName.set(agentId, savedDisplayName)
+    return savedDisplayName
+  }
+
+  const count = (agentTypeCounters.get(agentType) ?? 0) + 1
+  agentTypeCounters.set(agentType, count)
+  const displayName = `${agentType}-${count}`
+  agentIdToDisplayName.set(agentId, displayName)
+  return displayName
+}
+
+/** Return the in-memory display name for an agent, or undefined if not yet allocated. */
+export function getAgentDisplayName(agentId: AgentId): string | undefined {
+  return agentIdToDisplayName.get(agentId)
+}
+
 export function getAgentTranscriptPath(agentId: AgentId): string {
-  // Same sessionProjectDir consistency as getTranscriptPathForSession —
-  // subagent transcripts live under the session dir, so if the session
-  // transcript is at sessionProjectDir, subagent transcripts are too.
-  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  const baseDir = getSessionStorageBaseDir()
   const sessionId = getSessionId()
-  const subdir = agentTranscriptSubdirs.get(agentId)
-  const base = subdir
-    ? join(projectDir, sessionId, 'subagents', subdir)
-    : join(projectDir, sessionId, 'subagents')
-  return join(base, `agent-${agentId}.jsonl`)
+  const displayName = agentIdToDisplayName.get(agentId) ?? `agent-${agentId}`
+  return join(baseDir, sessionId, `${displayName}.jsonl`)
 }
 
 function getAgentMetadataPath(agentId: AgentId): string {
-  return getAgentTranscriptPath(agentId).replace(/\.jsonl$/, '.meta.json')
+  // return getAgentTranscriptPath(agentId).replace(/\.jsonl$/, '.meta.json')
+  const baseDir = getSessionStorageBaseDir()
+  return join(baseDir, getSessionId(), `agent-${agentId}.meta.json`)
 }
 
 export type AgentMetadata = {
   agentType: string
+  /** Human-readable filename stem assigned at creation, e.g. "explore-1". */
+  displayName?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -284,9 +334,12 @@ export async function writeAgentMetadata(
   agentId: AgentId,
   metadata: AgentMetadata,
 ): Promise<void> {
+  const displayName = allocateAgentDisplayName(agentId, metadata.agentType)
+  const enrichedMetadata: AgentMetadata = { ...metadata, displayName }
   const path = getAgentMetadataPath(agentId)
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify(metadata))
+  // await writeFile(path, JSON.stringify(metadata))
+  await writeFile(path, JSON.stringify(enrichedMetadata))
 }
 
 export async function readAgentMetadata(
@@ -318,10 +371,9 @@ export type RemoteAgentMetadata = {
 }
 
 function getRemoteAgentsDir(): string {
-  // Same sessionProjectDir fallback as getAgentTranscriptPath — the project
-  // dir (containing the .jsonl), not the session dir, so sessionId is joined.
-  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
-  return join(projectDir, getSessionId(), 'remote-agents')
+  // const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  // return join(projectDir, getSessionId(), 'remote-agents')
+  return join(getSessionStorageBaseDir(), getSessionId(), 'remote-agents')
 }
 
 function getRemoteAgentMetadataPath(taskId: string): string {
@@ -399,8 +451,9 @@ export async function listRemoteAgentMetadata(): Promise<
 }
 
 export function sessionIdExists(sessionId: string): boolean {
-  const projectDir = getProjectDir(getOriginalCwd())
-  const sessionFile = join(projectDir, `${sessionId}.jsonl`)
+  // const projectDir = getProjectDir(getOriginalCwd())
+  // const sessionFile = join(projectDir, `${sessionId}.jsonl`)
+  const sessionFile = join(getSessionTrajectoryDir(), `${sessionId}.jsonl`)
   const fs = getFsImplementation()
   try {
     fs.statSync(sessionFile)
@@ -1449,6 +1502,47 @@ export async function recordTranscript(
   return (lastRecorded?.uuid as UUID | undefined) ?? startingParentUuid ?? null
 }
 
+const writtenSystemPromptKeys = new Set<string>()
+
+/**
+ * Append the full system prompt as the first structured entry in the session
+ * or subagent JSONL file. Written at most once per session/agent per process
+ * lifetime. Written directly (bypassing the Project write queue).
+ *
+ * Entry format: `{"type":"system_prompt","content":[...strings]}`
+ */
+export async function recordSessionSystemPrompt(
+  systemPrompt: string[],
+  agentId?: AgentId,
+): Promise<void> {
+  const allowTestPersistence = isEnvTruthy(
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE,
+  )
+  if (
+    (getNodeEnv() === 'test' && !allowTestPersistence) ||
+    getSettings_DEPRECATED()?.cleanupPeriodDays === 0 ||
+    isSessionPersistenceDisabled() ||
+    isEnvTruthy(process.env.CLAUDE_CODE_SKIP_PROMPT_HISTORY)
+  ) {
+    return
+  }
+
+  const key = agentId ? `agent:${agentId}` : `session:${getSessionId()}`
+  if (writtenSystemPromptKeys.has(key)) return
+  writtenSystemPromptKeys.add(key)
+
+  const filePath = agentId ? getAgentTranscriptPath(agentId) : getTranscriptPath()
+
+  const line =
+    jsonStringify({ type: 'system_prompt', content: systemPrompt }) + '\n'
+  try {
+    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
+    await fsAppendFile(filePath, line, { mode: 0o600 })
+  } catch (e) {
+    logError(e)
+  }
+}
+
 export async function recordSidechainTranscript(
   messages: Message[],
   agentId?: string,
@@ -1597,11 +1691,12 @@ export async function hydrateRemoteSession(
     const remoteLogs =
       (await sessionIngress.getSessionLogs(sessionId, ingressUrl)) || []
 
-    // Ensure the project directory and session file exist
-    const projectDir = getProjectDir(getOriginalCwd())
-    await mkdir(projectDir, { recursive: true, mode: 0o700 })
-
+    // // Ensure the project directory and session file exist
+    // const projectDir = getProjectDir(getOriginalCwd())
+    // await mkdir(projectDir, { recursive: true, mode: 0o700 })
+    
     const sessionFile = getTranscriptPathForSession(sessionId)
+    await mkdir(dirname(sessionFile), { recursive: true, mode: 0o700 })
 
     // Replace local logs with remote logs. writeFile truncates, so no
     // unlink is needed; an empty remoteLogs array produces an empty file.
@@ -1652,11 +1747,13 @@ export async function hydrateFromCCRv2InternalEvents(
       return false
     }
 
-    const projectDir = getProjectDir(getOriginalCwd())
-    await mkdir(projectDir, { recursive: true, mode: 0o700 })
+    // const projectDir = getProjectDir(getOriginalCwd())
+    // await mkdir(projectDir, { recursive: true, mode: 0o700 })
 
     // Write foreground transcript
+    // const sessionFile = getTranscriptPathForSession(sessionId)
     const sessionFile = getTranscriptPathForSession(sessionId)
+    await mkdir(dirname(sessionFile), { recursive: true, mode: 0o700 })
     const fgContent = events.map(e => jsonStringify(e.payload) + '\n').join('')
     await writeFile(sessionFile, fgContent, { encoding: 'utf8', mode: 0o600 })
 
@@ -2558,8 +2655,13 @@ async function trackSessionBranchingAnalytics(
 }
 
 export async function fetchLogs(limit?: number): Promise<LogOption[]> {
-  const projectDir = getProjectDir(getOriginalCwd())
-  const logs = await getSessionFilesLite(projectDir, limit, getOriginalCwd())
+  // const projectDir = getProjectDir(getOriginalCwd())
+  // const logs = await getSessionFilesLite(projectDir, limit, getOriginalCwd())
+  const logs = await getSessionFilesLite(
+    getSessionTrajectoryDir(),
+    limit,
+    getOriginalCwd(),
+  )
 
   await trackSessionBranchingAnalytics(logs)
 
@@ -3829,10 +3931,11 @@ async function loadSessionFile(sessionId: UUID): Promise<{
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
 }> {
-  const sessionFile = join(
-    getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
-    `${sessionId}.jsonl`,
-  )
+  // const sessionFile = join(
+  //   getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
+  //   `${sessionId}.jsonl`,
+  // )
+  const sessionFile = join(getSessionStorageBaseDir(), `${sessionId}.jsonl`)
   return loadTranscriptFile(sessionFile)
 }
 
@@ -4152,8 +4255,9 @@ async function getStatOnlyLogsForWorktrees(
     logForDebugging(
       `Failed to read projects dir ${projectsDir}, falling back to current project: ${e}`,
     )
-    const projectDir = getProjectDir(getOriginalCwd())
-    return getSessionFilesLite(projectDir, limit, getOriginalCwd())
+    // const projectDir = getProjectDir(getOriginalCwd())
+    // return getSessionFilesLite(projectDir, limit, getOriginalCwd())
+    return getSessionFilesLite(getSessionTrajectoryDir(), limit, getOriginalCwd())
   }
 
   for (const dirent of allDirents) {
@@ -4192,6 +4296,17 @@ export async function getAgentTranscript(agentId: AgentId): Promise<{
   messages: Message[]
   contentReplacements: ContentReplacementRecord[]
 } | null> {
+  if (!getAgentDisplayName(agentId)) {
+    try {
+      const meta = await readAgentMetadata(agentId)
+      if (meta?.displayName) {
+        allocateAgentDisplayName(agentId, meta.agentType, meta.displayName)
+      }
+    } catch {
+      // Metadata not found — fall back to agent-${agentId} path.
+    }
+  }
+
   const agentFile = getAgentTranscriptPath(agentId)
 
   try {
@@ -4322,28 +4437,26 @@ export async function loadSubagentTranscripts(
   return transcripts
 }
 
-// Globs the session's subagents dir directly — unlike AppState.tasks, this survives task eviction.
+// Globs the session directory — unlike AppState.tasks, this survives task eviction.
+// Uses stable agent-${agentId}.meta.json sidecars to discover agent IDs.
 export async function loadAllSubagentTranscriptsFromDisk(): Promise<{
   [agentId: string]: Message[]
 }> {
-  const subagentsDir = join(
-    getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
-    getSessionId(),
-    'subagents',
-  )
+  const sessionDir = join(getSessionStorageBaseDir(), getSessionId())
   let entries: Dirent[]
   try {
-    entries = await readdir(subagentsDir, { withFileTypes: true })
+    entries = await readdir(sessionDir, { withFileTypes: true })
   } catch {
     return {}
   }
-  // Filename format is the inverse of getAgentTranscriptPath() — keep in sync.
   const agentIds = entries
     .filter(
       d =>
-        d.isFile() && d.name.startsWith('agent-') && d.name.endsWith('.jsonl'),
+        d.isFile() &&
+        d.name.startsWith('agent-') &&
+        d.name.endsWith('.meta.json'),
     )
-    .map(d => d.name.slice('agent-'.length, -'.jsonl'.length))
+    .map(d => d.name.slice('agent-'.length, -'.meta.json'.length))
   return loadSubagentTranscripts(agentIds)
 }
 
