@@ -13,6 +13,11 @@ import { registerStuckSkill } from './stuck.js'
 import { registerCronDeleteSkill, registerCronListSkill } from './cronManage.js'
 import { registerLoopSkill } from './loop.js'
 import { registerDreamSkill } from './dream.js'
+import { registerReclaimSkill } from './reclaim.js'
+import { registerReclaimReviewSkill } from './reclaim-review.js'
+import { registerReclaimAuditSkill } from './reclaim-audit.js'
+import { registerReclaimDebtSkill } from './reclaim-debt.js'
+import { registerReclaimHelpSkill } from './reclaim-help.js'
 import { registerUpdateConfigSkill } from './updateConfig.js'
 import { registerVerifySkill } from './verify.js'
 import { registerStrictPlanSkill } from '../../costrict/skill/strictPlan.js'
@@ -47,6 +52,12 @@ export function initBundledSkills(): void {
   registerCronListSkill()
   registerCronDeleteSkill()
   registerDreamSkill()
+  // Reclaim: lazy-senior-dev mode, always available (no feature gate).
+  registerReclaimSkill()
+  registerReclaimReviewSkill()
+  registerReclaimAuditSkill()
+  registerReclaimDebtSkill()
+  registerReclaimHelpSkill()
   if (feature('REVIEW_ARTIFACT')) {
     /* eslint-disable @typescript-eslint/no-require-imports */
     const { registerHunterSkill } = require('./hunter.js')
