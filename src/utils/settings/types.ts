@@ -716,6 +716,11 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .catch(undefined)
         .describe('Persisted effort level for supported models.'),
+      reclaimMode: z
+        .enum(['off', 'lite', 'full', 'ultra'])
+        .optional()
+        .catch(undefined)
+        .describe('Persisted Reclaim intensity mode (off/lite/full/ultra).'),
       advisorModel: z
         .string()
         .optional()
