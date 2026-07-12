@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import { shouldAutoEnableClaudeInChrome } from 'src/utils/claudeInChrome/setup.js'
 import { registerCodeReviewSecuritySkill } from 'src/costrict/skill/codeReviewSecurity.js'
+import { registerStrictCodeReviewSkill } from 'src/costrict/skill/strictCodeReview.js'
 import { registerBatchSkill } from './batch.js'
 import { registerClaudeInChromeSkill } from './claudeInChrome.js'
 import { registerDebugSkill } from './debug.js'
@@ -30,6 +31,7 @@ import { registerTddSkill } from 'src/costrict/skill/tdd.js'
  */
 export function initBundledSkills(): void {
   registerCodeReviewSecuritySkill()
+  registerStrictCodeReviewSkill()
   registerUpdateConfigSkill()
   registerProjectWikiSkill()
   registerTddSkill()
